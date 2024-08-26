@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Middleware\AllowMiddleware;
+use App\Http\Middleware\CacheHeadersMiddleware;
 use App\Http\Middleware\ContentTypeMiddleware;
 use App\Http\Middleware\EnsureEmailIsVerified;
 use App\Http\Middleware\Security\XFrameOptionsMiddleware;
@@ -21,12 +22,6 @@ use Treblle\SecurityHeaders\Http\Middleware\PermissionsPolicy;
 use Treblle\SecurityHeaders\Http\Middleware\RemoveHeaders;
 use Treblle\SecurityHeaders\Http\Middleware\SetReferrerPolicy;
 use Treblle\SecurityHeaders\Http\Middleware\StrictTransportSecurity;
-
-
-
-
-
-
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -49,6 +44,7 @@ return Application::configure(basePath: dirname(__DIR__))
             EnsureFrontendRequestsAreStateful::class,
             StartSession::class,
             ShareErrorsFromSession::class,
+            CacheHeadersMiddleware::class
         ]);
         $middleware->alias([
             'allow' => AllowMiddleware::class,
