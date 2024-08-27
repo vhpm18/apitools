@@ -13,14 +13,14 @@ class CacheHeadersMiddleware
      *
      * @param  \Closure(\Illuminate\Http\Request): (\Symfony\Component\HttpFoundation\Response)  $next
      */
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, int $expiration = 3600): Response
     {
         $response = $next($request);
 
         $response->headers->add([
-            'Cache-Control' => 'public, max-age=60, etag',
+            'Cache-Control' => 'public, max-age=' . $expiration . ', ETag',
             'Pragma' => 'public',
-            'Expires' => gmdate('D, d M Y H:i:s', time() + 60) . ' GMT',
+            'Expires' => gmdate('D, d M Y H:i:s', time() + $expiration) . ' GMT',
         ]);
 
         return $response;

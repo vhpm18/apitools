@@ -1,0 +1,43 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use App\Enums\Cache\CacheKey;
+use App\Enums\Cache\CacheTtl;
+use {{ namespacedModel }};
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\DatabaseManager;
+use Illuminate\Database\Eloquent\Model;
+use App\Services\CacheService;
+
+final readonly class {{ class }}
+{
+    public function __construct(
+        private CacheService $cache,
+        private DatabaseManager $database,
+    ) {}
+
+    public function all(int $perPage = 15): LengthAwarePaginator
+    {
+        return $this->cache->remember(
+            key: CacheKey::{{ model }}All,
+            ttl: CacheTtl::TenMinutes,
+            callback: static fn() => {{ model }}::query()->with('relations')->latest()->paginate($perPage),
+        );
+    }
+
+    public function create(array $data): {{ model }}|Model
+    {
+        try {
+            return $this->database->transaction(
+                callback: fn() => {{ model }}::query()->create($data),
+                attempts: 3,
+            );
+        } catch (\Exception $e) {
+            // Manejo de excepciones
+            throw new \RuntimeException('Error al crear el usuario: ' . $e->getMessage());
+        }
+    }
+}
