@@ -4,13 +4,12 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use App\Enums\Version;
-use Illuminate\Console\GeneratorCommand;
 use Illuminate\Support\Str;
-use ReflectionClass;
-use ReflectionException;
+use Illuminate\Console\Command;
+use Illuminate\Support\Composer;
+use Illuminate\Filesystem\Filesystem;
 
-final class MakeCommand extends GeneratorCommand
+class MakeCommand extends Command
 {
     /**
      * The name and signature of the console command.
@@ -18,164 +17,591 @@ final class MakeCommand extends GeneratorCommand
      * @var string
      */
     protected $signature = 'api:make
-                            {name : The resource name. E.g. Posts}
-                            {namespace : The namespace name. E.g. V1/Post}
-                            {--ver=v1.0 : The version used to create sub-folders}
-                            {--C|controllers : Create only the controller files}
-                            {--c|no-controllers : Create all files except the controller files}
-                            {--T|request : Create only the request files}
-                            {--t|no-request : Create all files except the request files}
-                            {--R|resource : Create only the resource files}
-                            {--r|no-resource : Create all files except the resource files}';
+                            {--namespace= : The namespace name. E.g. V1}
+                            {--resource= : The Resource name}
+                            {--controller= : The Controller name}
+                            {--model= : The Model name}
+                            {attributes?}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Create all the needed files for the given resource';
+    protected $description = 'Create a new model, migration, controller and add routes';
 
-    protected function getStub() {}
+    /**
+     * The filesystem instance.
+     *
+     * @var \Illuminate\Filesystem\Filesystem
+     */
+    private $files;
 
-    public function handle(): int
+    /**
+     * @var Composer
+     */
+    private $composer;
+
+    /**
+     * @var array The data types that can be created in a migration.
+     */
+    private $dataTypes = [
+        'string',
+        'integer',
+        'boolean',
+        'bigIncrements',
+        'bigInteger',
+        'binary',
+        'boolean',
+        'char',
+        'date',
+        'dateTime',
+        'float',
+        'increments',
+        'json',
+        'jsonb',
+        'longText',
+        'mediumInteger',
+        'mediumText',
+        'nullableTimestamps',
+        'smallInteger',
+        'tinyInteger',
+        'softDeletes',
+        'text',
+        'time',
+        'timestamp',
+        'timestamps',
+        'rememberToken',
+    ];
+
+    private $fakerMethods = [
+        'string' => ['method' => 'words', 'parameters' => '2, true'],
+        'integer' => ['method' => 'randomNumber', 'parameters' => ''],
+    ];
+
+    /**
+     * @var array $columnProperties Properties that can be applied to a table column.
+     */
+    private $columnProperties = [
+        'unsigned',
+        'index',
+        'nullable'
+    ];
+
+    /**
+     * @param $rootNamespace
+     */
+    private $rootNamespaceService = 'Services';
+
+    /**
+     * Create a new command instance.
+     *
+     * @param Filesystem $files
+     * @param Composer $composer
+     */
+    public function __construct(Filesystem $files, Composer $composer)
     {
-        /** @var string $name */
-        $name = $this->argument('name');
+        parent::__construct();
 
-        /** @var string $namespace */
-        $namespace = $this->argument('namespace');
+        $this->files = $files;
 
-        /** @var string $version */
-        $version = $this->option('ver');
+        $this->composer = $composer;
+    }
 
-        $resource = (string) Str::of($name)->studly()->plural();
-        $version  = Version::from($version)->name;
+    /**
+     * Execute the console command.
+     *
+     * @return mixed
+     */
+    public function handle()
+    {
+        $namespace = $this->option('namespace');
+        $resource = $this->option('resource');
+        $model = $this->option('model');
+        $controller = $this->option('controller');
+        //$namespace = trim($this->input->getArgument('namespace'));
 
-        if ((bool) $this->option('controllers')) {
-            $this->makeControllers($resource, $version, $namespace);
-            $this->makeService(Str::singular($resource), $version, $namespace);
+        $this->createService($namespace, $resource, $model);
 
-            return 0;
+        $this->createModel($model);
+
+        // $this->createMigration($name);
+
+        // $this->createController($name);
+
+        // $this->appendRoutes($name);
+
+        // $this->createModelFactory($name);
+    }
+
+    private function createModelFactory($name)
+    {
+        $model = $this->modelName($name);
+
+        $stub = $this->files->get(__DIR__ . '/../Stubs/factory.stub');
+
+        $stub = str_replace('CLASSNAME', $model, $stub);
+
+        $class = 'App\\' . $model;
+        $model = new $class;
+
+        $stub = str_replace(
+            'ATTRIBUTES',
+            $this->buildFakerAttributes($model->migrationAttributes()),
+            $stub
+        );
+
+        $this->files->append(database_path('factories/ModelFactory.php'), $stub);
+
+        $this->info('Created model factory');
+
+        return true;
+    }
+
+    public function buildFakerAttributes($attributes)
+    {
+        $faker = '';
+
+        foreach ($attributes as $attribute) {
+
+            $formatter =
+                $this->fakerMethods[$this->getFieldTypeFromProperties($attribute['properties'])];
+
+            $method = $formatter['method'];
+            $parameters = $formatter['parameters'];
+
+            $faker .= "'" . $attribute['name'] . "' => \$faker->" . $method . "(" . $parameters . ")," . PHP_EOL . '        ';
         }
 
-        if ((bool) $this->option('request')) {
-            $this->makeRequests($resource, $version, $namespace);
+        return rtrim($faker);
+    }
 
-            return 0;
+    /**
+     * Create and store a new Model to the filesystem.
+     *
+     * @param string $name
+     * @return bool
+     */
+    private function createModel($name)
+    {
+        $modelName = $this->modelName($name);
+
+        $filename = $modelName . '.php';
+
+        if ($this->files->exists(app_path($filename))) {
+            $this->error('Model already exists!');
+            return false;
         }
 
-        if ((bool) $this->option('resource')) {
-            $this->makeResources($resource, $version, $namespace);
+        $model = $this->buildModel($name);
 
-            return 0;
+        $this->files->put(app_path('/' . $filename), $model);
+
+        $this->info($modelName . ' Model created');
+
+        return true;
+    }
+
+    private function createMigration($name)
+    {
+        $filename = $this->buildMigrationFilename($name);
+
+        if ($this->files->exists(database_path($filename))) {
+            $this->error('Migration already exists!');
+            return false;
         }
 
-        if (! (bool) $this->option('no-controllers')) {
-            $this->makeControllers($resource, $version, $namespace);
-            $this->makeService(Str::singular($resource), $version, $namespace);
+        $migration = $this->buildMigration($name);
+
+        $this->files->put(
+            database_path('/migrations/' . $filename),
+            $migration
+        );
+
+        if (env('APP_ENV') != 'testing') {
+            $this->composer->dumpAutoloads();
         }
 
-        if (! (bool) $this->option('no-request')) {
-            $this->makeRequests($resource, $version, $namespace);
+        $this->info('Created migration ' . $filename);
+
+        return true;
+    }
+
+    private function createController($modelName)
+    {
+        $filename = ucfirst($modelName) . 'Controller.php';
+
+        if ($this->files->exists(app_path('Http/' . $filename))) {
+            $this->error('Controller already exists!');
+            return false;
         }
 
-        if (! (bool) $this->option('no-resource')) {
-            $this->makeResources($resource, $version, $namespace);
+        $stub = $this->files->get(__DIR__ . '/../Stubs/controller.stub');
+
+        $stub = str_replace('MyModelClass', ucfirst($modelName), $stub);
+        $stub = str_replace('myModelInstance', Str::camel($modelName), $stub);
+        $stub = str_replace('template', strtolower($modelName), $stub);
+
+        $this->files->put(app_path('Http/Controllers/' . $filename), $stub);
+
+        $this->info('Created controller ' . $filename);
+
+        return true;
+    }
+
+    private function createService(null|string $namespace, string $resource, string $model)
+    {
+        //Services/V1/Post/PostService.php
+        //🤖
+
+        $path =  (!is_null($namespace))
+            ? $this->rootNamespaceService . '/' . $namespace
+            : $this->rootNamespaceService;
+
+        if (windows_os()) {
+            $path = str_replace('/', '\\', $path);
         }
 
-        $this->makeTests($resource, $version, $namespace);
+        $filename = sprintf($path . '/%s/%sService.php', ucfirst($resource), ucfirst($resource));
+
+        if ($this->files->exists(app_path($filename))) {
+            $this->error('Service already exists!');
+            return false;
+        }
+
+        $stub = $this->files->get($this->getServiceStub('service'));
+
+        $namespacedModel = !is_null($model)
+            ? $this->getModelNamespace(Str::singular($model))
+            : $this->error('Indique modelo para servicio');
+
+        $namespace = sprintf($this->rootNamespace() . '%s', str_replace('/', '\\', $path));
+        $className = sprintf('%sService', ucfirst($resource));
+
+        $stub = str_replace('{{ namespace }}', ucfirst($namespace), $stub);
+        $stub = str_replace('{{ namespacedModel }}', ucfirst($namespacedModel), $stub);
+        $stub = str_replace('{{ class }}', ucfirst($className), $stub);
+        $stub = str_replace('{{ model }}', Str::singular($model), $stub);
+
+        $directory = dirname(app_path($filename));
+        if (!$this->files->exists($directory)) {
+            $this->files->makeDirectory($directory, 0755, true);
+        }
+
+        $this->files->put(app_path($filename), $stub);
+
+        $this->info('Created controller ' . $filename);
+
+        return true;
+    }
+
+    private function appendRoutes($modelName)
+    {
+        $modelTitle = ucfirst($modelName);
+
+        $modelName = strtolower($modelName);
+
+        $newRoutes = $this->files->get(__DIR__ . '/../Stubs/routes.stub');
+
+        $newRoutes = str_replace('|MODEL_TITLE|', $modelTitle, $newRoutes);
+
+        $newRoutes = str_replace('|MODEL_NAME|', $modelName, $newRoutes);
+
+        $newRoutes = str_replace('|CONTROLLER_NAME|', $modelTitle . 'Controller', $newRoutes);
+
+        $this->files->append(
+            app_path('Http/routes.php'),
+            $newRoutes
+        );
+
+        $this->info('Added routes for ' . $modelTitle);
+    }
+
+    protected function buildMigration($name)
+    {
+        $stub = $this->files->get(__DIR__ . '/../Stubs/migration.stub');
+
+        $className = 'Create' . Str::plural($name) . 'Table';
+
+        $stub = str_replace('MIGRATION_CLASS_PLACEHOLDER', $className, $stub);
+
+        $table = strtolower(Str::plural($name));
+
+        $stub = str_replace('TABLE_NAME_PLACEHOLDER', $table, $stub);
+
+        $class = 'App\\' . $name;
+        $model = new $class;
+
+        $stub = str_replace('MIGRATION_COLUMNS_PLACEHOLDER', $this->buildTableColumns($model->migrationAttributes()), $stub);
+
+        return $stub;
+    }
+
+    protected function buildModel($name)
+    {
+        $stub = $this->files->get(__DIR__ . '/../Stubs/model.stub');
+
+        $stub = $this->replaceClassName($name, $stub);
+
+        $stub = $this->addMigrationAttributes($this->argument('attributes'), $stub);
+
+        $stub = $this->addModelAttributes('fillable', $this->argument('attributes'), $stub);
+
+        $stub = $this->addModelAttributes('hidden', $this->argument('attributes'), $stub);
+
+        return $stub;
+    }
+
+    public function convertModelToTableName($model)
+    {
+        return Str::plural(Str::snake($model));
+    }
+
+    public function buildMigrationFilename($model)
+    {
+        $table = $this->convertModelToTableName($model);
+
+        return date('Y_m_d_his') . '_create_' . $table . '_table.php';
+    }
+
+    private function replaceClassName($name, $stub)
+    {
+        return str_replace('NAME_PLACEHOLDER', $name, $stub);
+    }
+
+    private function addMigrationAttributes($text, $stub)
+    {
+        $attributesAsArray = $this->parseAttributesFromInputString($text);
+        $attributesAsText = $this->convertArrayToString($attributesAsArray);
+
+        return str_replace('MIGRATION_ATTRIBUTES_PLACEHOLDER', $attributesAsText, $stub);
+    }
+
+    /**
+     * Convert a pipe-separated list of attributes to an array.
+     *
+     * @param string $text The Pipe separated attributes
+     * @return array
+     */
+    public function parseAttributesFromInputString($text)
+    {
+        $parts = explode('|', $text);
+
+        $attributes = [];
+
+        foreach ($parts as $part) {
+            $components = explode(':', $part);
+            $attributes[$components[0]] =
+                isset($components[1]) ? explode(',', $components[1]) : [];
+        }
+
+        return $attributes;
+    }
+
+    /**
+     * Convert a PHP array into a string version.
+     *
+     * @param $array
+     *
+     * @return string
+     */
+    public function convertArrayToString($array)
+    {
+        $string = '[';
+
+        foreach ($array as $name => $properties) {
+            $string .= '[';
+            $string .= "'name' => '" . $name . "',";
+
+            $string .= "'properties' => [";
+            foreach ($properties as $property) {
+                $string .= "'" . $property . "', ";
+            }
+            $string = rtrim($string, ', ');
+            $string .= ']';
+
+            $string .= '],';
+        }
+
+        $string = rtrim($string, ',');
+
+        $string .= ']';
+
+
+        return $string;
+    }
+
+    public function addModelAttributes($name, $attributes, $stub)
+    {
+        $attributes = '[' . collect($this->parseAttributesFromInputString($attributes))
+            ->filter(function ($attribute) use ($name) {
+                return in_array($name, $attribute);
+            })->map(function ($attributes, $name) {
+                return "'" . $name . "'";
+            })->values()->implode(', ') . ']';
+
+
+        return str_replace(strtoupper($name) . '_PLACEHOLDER', $attributes, $stub);
+    }
+
+    public function buildTableColumns($attributes)
+    {
+
+        return rtrim(collect($attributes)->reduce(function ($column, $attribute) {
+
+            $fieldType = $this->getFieldTypeFromProperties($attribute['properties']);
+
+            if ($length = $this->typeCanDefineSize($fieldType)) {
+                $length = $this->extractFieldLengthValue($attribute['properties']);
+            }
+
+            $properties = $this->extractAttributePropertiesToApply($attribute['properties']);
+
+            return $column . $this->buildSchemaColumn($fieldType, $attribute['name'], $length, $properties);
+        }));
+    }
+
+    /**
+     * Get the column field type based from the properties of the field being created.
+     *
+     * @param array $properties
+     * @return string
+     */
+    private function getFieldTypeFromProperties($properties)
+    {
+        $type = array_intersect($properties, $this->dataTypes);
+
+        // If the properties that were given in the command
+        // do not explicitly define a data type, or there
+        // is no matching data type found, the column
+        // should be cast to a string.
+
+        if (! $type) {
+            return 'string';
+        }
+
+        return $type[0];
+    }
+
+    /**
+     * Can the data type have it's size controlled within the migration?
+     *
+     * @param string $type
+     * @return bool
+     */
+    private function typeCanDefineSize($type)
+    {
+        return $type == 'string' || $type == 'char';
+    }
+
+    /**
+     * Extract a numeric length value from all properties specified for the attribute.
+     *
+     * @param array $properties
+     * @return int $length
+     */
+    private function extractFieldLengthValue($properties)
+    {
+        foreach ($properties as $property) {
+            if (is_numeric($property)) {
+                return $property;
+            }
+        }
 
         return 0;
     }
 
-    private function makeControllers(string $resource, string $version, string $namespace): void
+    /**
+     * Get the column properties that should be applied to the column.
+     *
+     * @param $properties
+     * @return array
+     */
+    private function extractAttributePropertiesToApply($properties)
     {
-        collect(['Destroy', 'Index', 'Show', 'Store', 'Update'])
-            ->each(
-                function (string $action) use ($resource,  $version, $namespace) {
-                    $this->callSilently('make:controller', [
-                        'name'    => $this->buildFilePath('controller', $resource, $version, $action, $namespace),
-                        '--type'  => Str::lower($action),
-                        '--model' => $this->guessModelFromResourceName($resource),
-                    ]);
-                }
-            );
+        return array_intersect($properties, $this->columnProperties);
     }
 
-    private function makeService(string $resource, string $version, string $namespace): void
+    /**
+     * Create a Schema Builder column.
+     *
+     * @param string $fieldType The type of column to create
+     * @param string $name Name of the column to create
+     * @param int $length Field length
+     * @param array $traits Additional properties to apply to the column
+     * @return string
+     */
+    private function buildSchemaColumn($fieldType, $name, $length = 0, $traits = [])
     {
-        $this->callSilently('make:service', [
-            'name' => $this->buildFilePath(
-                'service',
-                $resource,
-                $version,
-                null,
-                $namespace
-            ),
-            '--model' => $resource,
-        ]);
+        return sprintf(
+            "\$table->%s('%s'%s)%s;" . PHP_EOL . '            ',
+            $fieldType,
+            $name,
+            $length > 0 ? ", $length" : '',
+            implode('', array_map(function ($trait) {
+                return '->' . $trait . '()';
+            }, $traits))
+        );
     }
 
-    private function makeRequests(string $resource, string $version, string $namespace): void
+    /**
+     * Build a Model name from a word.
+     *
+     * @param string $name
+     * @return string
+     */
+    private function modelName($name)
     {
-        collect(['Store', 'Update'])
-            ->each(fn(string $action): int => $this->callSilently('make:request', [
-                'name' => $this->buildFilePath('request', $resource, $version, $action, $namespace),
-            ]));
+        return ucfirst($name);
     }
 
-    private function makeResources(string $resource, string $version, string $namespace): void
+    /**
+     * @params string $fileName
+     * @return string
+     */
+    protected function getServiceStub(string $fileName): string
     {
-        $this->callSilently('make:resource', [
-            'name' => $this->buildFilePath('resource', $resource, $version, null, $namespace),
-        ]);
+        $stub ??= "/stubs/$fileName.stub";
+        return $this->resolveStubPath($stub);
     }
 
-    private function makeTests(string $resource, string $version, string $namespace): void
+    protected function resolveStubPath($stub)
     {
-        collect(['Destroy', 'Index', 'Show', 'Store', 'Update'])
-            ->each(fn(string $action): int => $this->callSilently('make:test', [
-                'name'   => $this->buildFilePath('test', $resource, $version, $action, $namespace),
-                '--pest' => 1,
-            ]));
+        return file_exists($customPath = $this->laravel->basePath(trim($stub, '/')))
+            ? $customPath
+            : __DIR__ . $stub;
     }
 
-    private function buildFilePath(
-        string $type,
-        string $resource,
-        string $version,
-        string $action = null,
-        string $namespace
-    ): string {
-        return match ($type) {
-            'controller' => sprintf('Api/%s/%s/%s%sController', $namespace, $resource, $resource, $action),
-            'service' => sprintf('/%s/%sService', $namespace, $resource),
-            'request'    => sprintf('Api/%s/%s%sRequest', $namespace, Str::singular($resource), $action),
-            'resource'   => sprintf('Api/%s/%sResource', $namespace,  Str::singular($resource)),
-            default      => sprintf('Http/Controllers/Api/%s/%s/%s/%s%sControllerTest', $namespace, $version, $resource, $resource, $action),
-        };
+    /**
+     * Get the root namespace for the class.
+     *
+     * @return string
+     */
+    protected function rootNamespace()
+    {
+        return $this->laravel->getNamespace();
     }
 
-    private function guessModelFromResourceName(string $resource): ?string
+    /**
+     * Qualify the given model class base name.
+     *
+     * @param  string  $model
+     * @return string
+     */
+    protected function getModelNamespace(string $model)
     {
-        /** @var class-string $model */
-        $model = 'App\\Models\\' . Str::of($resource)->studly()->singular();
+        $model = ltrim($model, '\\/');
 
-        try {
-            $reflector = new ReflectionClass($model);
-            $filename  = $reflector->getFileName();
-        } catch (ReflectionException) {
-            return null;
+        $model = str_replace('/', '\\', $model);
+
+        $rootNamespace = $this->rootNamespace();
+
+        if (Str::startsWith($model, $rootNamespace)) {
+            return $model;
         }
 
-        if ($filename === false) {
-            return null;
-        }
-
-        if (! file_exists($filename)) {
-            return null;
-        }
-
-        return $model;
+        return is_dir(app_path('Models'))
+            ? $rootNamespace . 'Models\\' . $model
+            : $rootNamespace . $model;
     }
 }
