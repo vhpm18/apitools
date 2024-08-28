@@ -8,6 +8,7 @@ use Illuminate\Support\Str;
 use Illuminate\Console\Command;
 use Illuminate\Support\Composer;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Collection;
 
 class MakeCommand extends Command
 {
@@ -117,41 +118,68 @@ class MakeCommand extends Command
     {
         $namespace = $this->option('namespace');
         $resource = $this->option('resource');
-        $model = $this->option('model');
         $controller = $this->option('controller');
-        //$namespace = trim($this->input->getArgument('namespace'));
+        $model = $this->option('model');
 
-        $this->createService($namespace, $resource, $model);
+        if (!is_null($resource) && !is_null($model)) {
+            $this->createService($namespace, $resource, Str::singular($model));
+        }
 
-        $this->createModel($model);
+        if (!is_null($model)) {
+            $this->createModel(name: Str::singular($model));
+            $this->createMigration(name: Str::singular($model));
+            $this->createModelFactory(name: Str::singular($model));
+        }
 
-        // $this->createMigration($name);
 
-        // $this->createController($name);
+        if (!is_null($controller)) {
+            $this->createController(
+                namespace: $namespace,
+                controller: $controller,
+                resource: $resource
+            );
+            $this->createResource(
+                namespace: $namespace,
+                resource: $resource,
+                model: Str::singular($model ?? $resource)
+            );
+        }
 
         // $this->appendRoutes($name);
 
-        // $this->createModelFactory($name);
     }
 
-    private function createModelFactory($name)
+    private function createModelFactory(string $name)
     {
         $model = $this->modelName($name);
 
-        $stub = $this->files->get(__DIR__ . '/../Stubs/factory.stub');
+        $stub = $this->files->get($this->getStubs(fileName: 'factory'));
 
-        $stub = str_replace('CLASSNAME', $model, $stub);
+        $namespacedModel = $this->getModelNamespace(
+            inModel: false,
+            model: Str::singular($model)
+        );
+        $stub = str_replace('{{ namespacedModel }}', $namespacedModel, $stub);
+        $stub = str_replace('{{ model }}', $model, $stub);
+        $filename = sprintf('factories/%sFactory.php', ucfirst($model));
 
-        $class = 'App\\' . $model;
+        $class = $namespacedModel;
         $model = new $class;
 
-        $stub = str_replace(
-            'ATTRIBUTES',
-            $this->buildFakerAttributes($model->migrationAttributes()),
-            $stub
-        );
+        if (!is_null($this->argument('attributes'))) {
+            $stub = str_replace(
+                search: 'ATTRIBUTES',
+                replace: $this->buildFakerAttributes($model->migrationAttributes()),
+                subject: $stub
+            );
+        }
 
-        $this->files->append(database_path('factories/ModelFactory.php'), $stub);
+        if ($this->files->exists(database_path($filename))) {
+            $this->error('Model Factory already exists!');
+            return false;
+        }
+
+        $this->files->append(database_path($filename), $stub);
 
         $this->info('Created model factory');
 
@@ -170,10 +198,19 @@ class MakeCommand extends Command
             $method = $formatter['method'];
             $parameters = $formatter['parameters'];
 
-            $faker .= "'" . $attribute['name'] . "' => \$faker->" . $method . "(" . $parameters . ")," . PHP_EOL . '        ';
+            $faker .= "'" . $attribute['name'] . "' => fake()->" . $method . "(" . $parameters . ")," . PHP_EOL . '        ';
         }
 
         return rtrim($faker);
+    }
+
+    public function buildResourceAttributes($attributes)
+    {
+        $resource = '';
+        foreach ($attributes as $attribute) {
+            $resource .= "'" . $attribute['name'] . "' => \$this->resource->" . $attribute['name'] . "," . PHP_EOL . '        ';
+        }
+        return rtrim($resource);
     }
 
     /**
@@ -182,27 +219,33 @@ class MakeCommand extends Command
      * @param string $name
      * @return bool
      */
-    private function createModel($name)
+    private function createModel(string $name)
     {
         $modelName = $this->modelName($name);
 
         $filename = $modelName . '.php';
+        $filename_path = app_path('Models/' . $filename);
 
-        if ($this->files->exists(app_path($filename))) {
+        if ($this->files->exists($filename_path)) {
             $this->error('Model already exists!');
             return false;
         }
 
+        $directory = dirname($filename_path);
+        if (!$this->files->exists($directory)) {
+            $this->files->makeDirectory($directory, 0755, true);
+        }
+
         $model = $this->buildModel($name);
 
-        $this->files->put(app_path('/' . $filename), $model);
+        $this->files->put($filename_path, $model);
 
         $this->info($modelName . ' Model created');
 
         return true;
     }
 
-    private function createMigration($name)
+    private function createMigration(string $name)
     {
         $filename = $this->buildMigrationFilename($name);
 
@@ -227,62 +270,126 @@ class MakeCommand extends Command
         return true;
     }
 
-    private function createController($modelName)
+    private function createController(string $namespace, string $controller, null|string $resource)
     {
-        $filename = ucfirst($modelName) . 'Controller.php';
+        $rootNamespace = sprintf('%s', str_replace('/', '\\', 'Http/Controllers/Api/'));
 
-        if ($this->files->exists(app_path('Http/' . $filename))) {
-            $this->error('Controller already exists!');
-            return false;
+        $path =  (!is_null($namespace)) ? $rootNamespace . $namespace : $rootNamespace;
+
+        $files = $this->extractContentFile(
+            path: $path,
+            controller: $controller,
+            namespace: $namespace,
+            resource: $resource
+        );
+
+        foreach ($files as $file) {
+            $filename = str_replace('\\', '/', $file['file']);
+
+            $directory = dirname(app_path($filename));
+            if (!$this->files->exists($directory)) {
+                $this->files->makeDirectory($directory, 0755, true);
+            }
+
+            $this->files->put(app_path($filename), $file['stub']);
+            $this->info('Created controller ' . $file['name']);
         }
-
-        $stub = $this->files->get(__DIR__ . '/../Stubs/controller.stub');
-
-        $stub = str_replace('MyModelClass', ucfirst($modelName), $stub);
-        $stub = str_replace('myModelInstance', Str::camel($modelName), $stub);
-        $stub = str_replace('template', strtolower($modelName), $stub);
-
-        $this->files->put(app_path('Http/Controllers/' . $filename), $stub);
-
-        $this->info('Created controller ' . $filename);
 
         return true;
     }
 
-    private function createService(null|string $namespace, string $resource, string $model)
+    private function createResource(string $namespace, string $resource, string $model): bool
     {
-        //Services/V1/Post/PostService.php
-        //🤖
+        $namespace = str_replace('/', '\\', $this->getRootNamespace(
+            rootNamespace: 'Http/Resources/Api',
+            namespace: $namespace,
+            resource: $resource
+        ));
 
-        $path =  (!is_null($namespace))
-            ? $this->rootNamespaceService . '/' . $namespace
-            : $this->rootNamespaceService;
+        $className = sprintf('%sResource', ucfirst($resource));
+        $filename = sprintf($namespace . '\\%sResource.php', ucfirst($resource));
+        $namespacedModel = $this->getModelNamespace(inModel: false, model: $model);
 
         if (windows_os()) {
-            $path = str_replace('/', '\\', $path);
+            $filename = str_replace('/', '\\', $filename);
         }
 
-        $filename = sprintf($path . '/%s/%sService.php', ucfirst($resource), ucfirst($resource));
+        $filename = str_replace('\\', '/', $filename);
+        if ($this->files->exists(app_path($filename))) {
+            $this->error("$resource Resource already exists!");
+            return false;
+        }
+
+        $stub = $this->files->get($this->getStubs('resource'));
+        $stub = $this->replaceNamespace($namespace,  $stub);
+        $stub = $this->replaceClassName($className, $stub);
+        $stub = str_replace('{{ namespacedModel }}', $namespacedModel, $stub);
+        $stub = str_replace('{{ model }}', Str::singular($model), $stub);
+
+        if (!is_null($this->argument('attributes'))) {
+            $class = $namespacedModel;
+            $model = new $class;
+            $stub = str_replace(
+                search: '{{ ATTRIBUTES }}',
+                replace: $this->buildResourceAttributes($model->migrationAttributes()),
+                subject: $stub
+            );
+        } else {
+            $stub = str_replace(
+                search: '{{ ATTRIBUTES }}',
+                replace: '',
+                subject: $stub
+            );
+        }
+
+
+        $directory = dirname(app_path($filename));
+        if (!$this->files->exists($directory)) {
+            $this->files->makeDirectory($directory, 0755, true);
+        }
+
+        $this->files->put(app_path($filename), $stub);
+        $this->info('Created Resource ' . $filename);
+        return true;
+    }
+
+    private function createService(null|string $namespace, string $resource, string $model): bool
+    {
+        $path =  $this->getRootNamespace(
+            rootNamespace: 'Services',
+            namespace: $namespace,
+            resource: $resource
+        );
+
+        $filename = $this->generatePathService(path: $path, resource: $resource);
+
+        if (windows_os()) {
+            $filename = str_replace('/', '\\', $filename);
+        }
 
         if ($this->files->exists(app_path($filename))) {
             $this->error('Service already exists!');
             return false;
         }
 
-        $stub = $this->files->get($this->getServiceStub('service'));
+        $stub = $this->files->get($this->getStubs('service'));
 
         $namespacedModel = !is_null($model)
-            ? $this->getModelNamespace(Str::singular($model))
+            ? $this->getModelNamespace(
+                inModel: false,
+                model: Str::singular($model)
+            )
             : $this->error('Indique modelo para servicio');
 
         $namespace = sprintf($this->rootNamespace() . '%s', str_replace('/', '\\', $path));
         $className = sprintf('%sService', ucfirst($resource));
 
-        $stub = str_replace('{{ namespace }}', ucfirst($namespace), $stub);
+        $stub = $this->replaceClassName($className, $stub);
+        $stub = $this->replaceNamespace($namespace,  $stub);
         $stub = str_replace('{{ namespacedModel }}', ucfirst($namespacedModel), $stub);
-        $stub = str_replace('{{ class }}', ucfirst($className), $stub);
         $stub = str_replace('{{ model }}', Str::singular($model), $stub);
 
+        $filename = str_replace('\\', '/', $filename);
         $directory = dirname(app_path($filename));
         if (!$this->files->exists($directory)) {
             $this->files->makeDirectory($directory, 0755, true);
@@ -293,6 +400,26 @@ class MakeCommand extends Command
         $this->info('Created controller ' . $filename);
 
         return true;
+    }
+
+    private function getRootNamespace(
+        string $rootNamespace,
+        null|string $namespace,
+        null|string $resource
+    ): string {
+
+        $path = (!is_null($namespace)) ? $rootNamespace . '\\' . $namespace : $rootNamespace;
+
+        if (!is_null($resource)) {
+            $path = sprintf($path . '\\%s', ucfirst($resource));
+        }
+
+        return $path;
+    }
+
+    private function generatePathService(string $path, string $resource): string
+    {
+        return sprintf($path . '/%sService.php', ucfirst($resource));
     }
 
     private function appendRoutes($modelName)
@@ -317,37 +444,65 @@ class MakeCommand extends Command
         $this->info('Added routes for ' . $modelTitle);
     }
 
-    protected function buildMigration($name)
+    protected function buildMigration(string $name)
     {
-        $stub = $this->files->get(__DIR__ . '/../Stubs/migration.stub');
+        $stub = '';
+        $class = $this->getModelNamespace(inModel: false, model: $name);
+        $model = new $class;
 
-        $className = 'Create' . Str::plural($name) . 'Table';
-
-        $stub = str_replace('MIGRATION_CLASS_PLACEHOLDER', $className, $stub);
+        if (!is_null($this->argument('attributes'))) {
+            $stub = $this->files->get(path: $this->getStubs(fileName: 'migration.create'));
+            $stub = str_replace(
+                search: '{{ MIGRATION_COLUMNS_PLACEHOLDER }}',
+                replace: $this->buildTableColumns(
+                    attributes: $model->migrationAttributes()
+                ),
+                subject: $stub
+            );
+        } else {
+            $stub = $this->files->get(path: $this->getStubs('migration.clear'));
+        }
 
         $table = strtolower(Str::plural($name));
 
-        $stub = str_replace('TABLE_NAME_PLACEHOLDER', $table, $stub);
-
-        $class = 'App\\' . $name;
-        $model = new $class;
-
-        $stub = str_replace('MIGRATION_COLUMNS_PLACEHOLDER', $this->buildTableColumns($model->migrationAttributes()), $stub);
+        $stub = str_replace('{{ table }}', $table, $stub);
 
         return $stub;
     }
 
     protected function buildModel($name)
     {
-        $stub = $this->files->get(__DIR__ . '/../Stubs/model.stub');
+        if (!is_null($this->argument('attributes'))) {
+            $stub = $this->files->get(path: $this->getStubs('model.attributes'));
+            $stub = $this->replaceClassName(className: $name, stub: $stub);
+            $stub = $this->replaceNamespace(
+                $this->getModelNamespace(inModel: true, model: $name),
+                stub: $stub
+            );
 
-        $stub = $this->replaceClassName($name, $stub);
+            $stub = $this->addMigrationAttributes($this->argument('attributes'), $stub);
 
-        $stub = $this->addMigrationAttributes($this->argument('attributes'), $stub);
+            $stub = $this->addModelAttributes(
+                $this->argument('attributes'),
+                $stub
+            );
 
-        $stub = $this->addModelAttributes('fillable', $this->argument('attributes'), $stub);
+            $stub = $this->addModelHiddenAttributes(
+                $this->argument('attributes'),
+                $stub
+            );
 
-        $stub = $this->addModelAttributes('hidden', $this->argument('attributes'), $stub);
+            return $stub;
+        }
+
+        $stub = $this->files->get(path: $this->getStubs('model'));
+
+        $stub = $this->replaceClassName(className: $name, stub: $stub);
+
+        $stub = $this->replaceNamespace(
+            namespace: $this->getModelNamespace(inModel: true, model: $name),
+            stub: $stub
+        );
 
         return $stub;
     }
@@ -364,9 +519,14 @@ class MakeCommand extends Command
         return date('Y_m_d_his') . '_create_' . $table . '_table.php';
     }
 
-    private function replaceClassName($name, $stub)
+    private function replaceClassName(string $className, string $stub)
     {
-        return str_replace('NAME_PLACEHOLDER', $name, $stub);
+        return str_replace('{{ class }}', $className, $stub);
+    }
+
+    private function replaceNamespace(string $namespace, string $stub)
+    {
+        return str_replace('{{ namespace }}', ucfirst($namespace), $stub);
     }
 
     private function addMigrationAttributes($text, $stub)
@@ -431,17 +591,32 @@ class MakeCommand extends Command
         return $string;
     }
 
-    public function addModelAttributes($name, $attributes, $stub)
+    public function addModelAttributes($attributes, $stub): string
     {
-        $attributes = '[' . collect($this->parseAttributesFromInputString($attributes))
-            ->filter(function ($attribute) use ($name) {
-                return in_array($name, $attribute);
-            })->map(function ($attributes, $name) {
-                return "'" . $name . "'";
-            })->values()->implode(', ') . ']';
+        $attributes = implode(
+            ', ',
+            array_map(function ($attribute) {
+                return "'" . $attribute . "'";
+            }, array_keys($this->parseAttributesFromInputString($attributes)))
+        );
+        return str_replace('{{ fillable }}', $attributes, $stub);
+    }
 
+    public function addModelHiddenAttributes($attributes, $stub): string
+    {
+        $hiddenAttributes = collect($this->parseAttributesFromInputString($attributes))
+            ->filter(fn($attribute) => in_array('hidden', $attribute))
+            ->map(fn($attribute) => $attribute)
+            ->keys()->toArray();
 
-        return str_replace(strtoupper($name) . '_PLACEHOLDER', $attributes, $stub);
+        $hidden = implode(
+            ', ',
+            array_map(function ($attribute) {
+                return "'" . $attribute . "'";
+            }, $hiddenAttributes)
+        );
+
+        return str_replace('{{ hidden }}', $hidden, $stub);
     }
 
     public function buildTableColumns($attributes)
@@ -559,7 +734,7 @@ class MakeCommand extends Command
      * @params string $fileName
      * @return string
      */
-    protected function getServiceStub(string $fileName): string
+    protected function getStubs(string $fileName): string
     {
         $stub ??= "/stubs/$fileName.stub";
         return $this->resolveStubPath($stub);
@@ -588,7 +763,7 @@ class MakeCommand extends Command
      * @param  string  $model
      * @return string
      */
-    protected function getModelNamespace(string $model)
+    protected function getModelNamespace(bool $inModel = false, string $model): string
     {
         $model = ltrim($model, '\\/');
 
@@ -600,8 +775,94 @@ class MakeCommand extends Command
             return $model;
         }
 
+        if ($inModel) {
+            return $rootNamespace . 'Models';
+        }
+
         return is_dir(app_path('Models'))
             ? $rootNamespace . 'Models\\' . $model
             : $rootNamespace . $model;
+    }
+
+    private function extractContentFile(
+        string $path,
+        string $controller,
+        string $namespace,
+        null|string $resource
+    ): array {
+
+        $arrayFiles = [];
+        foreach (['Index'] as $key => $action) {
+            $namespaceController = sprintf('App\\' . $path . '\\%s', ucfirst($controller));
+            $namespaceService = $this->getRootNamespace(
+                rootNamespace: 'App\\Services',
+                namespace: $namespace,
+                resource: $resource
+            );
+
+            $controller = sprintf('%sController', $action);
+            $service = !is_null($resource) ? sprintf('%sService', ucfirst($resource)) : null;
+            $file = sprintf($path . '/%s/%sController.php', ucfirst($resource), $action);
+
+            $resourceNamespace = str_replace('/', '\\', $this->getRootNamespace(
+                rootNamespace: 'Http/Resources/Api',
+                namespace: $namespace,
+                resource: $resource
+            ));
+            $resourceNamespace = sprintf($resourceNamespace . '\\%sResource', ucfirst($resource));
+
+            $stub = $this->files->get(
+                path: $this->getStubs('controller.' . strtolower($action))
+            );
+
+            $stub = $this->stubsControllerReplace(
+                stub: $stub,
+                controller: $controller,
+                namespaceController: $namespaceController,
+                namespacedService: $namespaceService . '\\' . $service,
+                service: $service,
+                namespacedResource: $resourceNamespace,
+                resource: sprintf('%sResource', ucfirst($resource))
+            );
+
+            if ($this->files->exists(app_path($file))) {
+                $this->error($action . "Controller already exists!");
+            } else {
+                if (windows_os()) {
+                    $arrayFiles[$key] = [
+                        'name' => $action,
+                        'file' => str_replace('/', '\\', $file),
+                        'stub' => $stub
+                    ];
+                } else {
+                    $arrayFiles[$key] = [
+                        'name' => $action,
+                        'file' => $file,
+                        'stub' => $stub
+                    ];
+                }
+            }
+        }
+
+        return $arrayFiles;
+    }
+
+    private function stubsControllerReplace(
+        string $stub,
+        string $controller,
+        string $namespaceController,
+        string $namespacedService,
+        null|string $service,
+        string $namespacedResource,
+        string $resource
+    ): string {
+        $stub = str_replace('{{ namespace }}', $namespaceController, $stub);
+        $stub = str_replace('{{ namespacedService }}', $namespacedService, $stub);
+        $stub = str_replace('{{ class }}', $controller, $stub);
+        $stub = str_replace('{{ service }}', $service, $stub);
+        $stub = str_replace('{{ namespacedResource }}', $namespacedResource, $stub);
+        $stub = str_replace('{{ resource }}', $resource, $stub);
+
+        return $stub;
     }
 }

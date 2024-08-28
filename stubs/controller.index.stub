@@ -4,27 +4,44 @@ declare(strict_types=1);
 
 namespace {{ namespace }};
 
+use App\Http\Controllers\Controller;
 use App\Enums\Version;
-use Illuminate\Http\Request;
-use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Illuminate\Routing\Controller;
-use Symfony\Component\HttpFoundation\Response;
+use {{ namespacedResource }};
+use App\Http\Responses\PaginateResponse;
 use {{ namespacedService }};
+use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Contracts\Support\Responsable;
+use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 
-final class {{ class }} extends Controller
+class IndexController extends Controller
 {
+
     public function __construct(
         private {{ service }} $service,
     ) {}
 
-
-    public function __invoke(Request $request, Version $version): AnonymousResourceCollection
+    public function __invoke(Request $request, Version $version): Responsable|AnonymousResourceCollection
     {
-//        abort_unless(
-//            $version->greaterThanOrEqualsTo(Version::v1_0),
-//            Response::HTTP_NOT_FOUND
-//        );
+        abort_unless(
+           $version->greaterThanOrEqualsTo(Version::v1_0),
+           Response::HTTP_NOT_FOUND
+        );
 
-        //
+        try {
+            $perPage = $request->get('per_page', 15); // Valor por defecto
+            $data = $this->service->all($perPage); // Pasar el valor de perPage
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Error al recuperar el recurso'], 500);
+        }
+
+        return new PaginateResponse(
+            new LengthAwarePaginator(
+                {{ resource }}::collection($data),
+                total: $data->total(),
+                perPage: 15,
+                currentPage: $request->get('page', 1)
+            )
+        );
     }
 }
