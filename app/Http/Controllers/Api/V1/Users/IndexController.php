@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\V1\Users;
 
+use App\Enums\Version;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\V1\UserResource;
 use App\Http\Responses\PaginateResponse;
@@ -11,6 +12,7 @@ use App\Services\UserService;
 use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Symfony\Component\HttpFoundation\Response;
 
 class IndexController extends Controller
 {
@@ -19,8 +21,12 @@ class IndexController extends Controller
         private UserService $service,
     ) {}
 
-    public function __invoke(Request $request): Responsable
+    public function __invoke(Request $request, Version $version): Responsable
     {
+        abort_unless(
+            $version->greaterThanOrEqualsTo(Version::v1_0),
+            Response::HTTP_NOT_FOUND
+        );
         try {
             $perPage = $request->get('per_page', 15); // Valor por defecto
             $users = $this->service->all($perPage); // Pasar el valor de perPage
