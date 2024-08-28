@@ -306,8 +306,8 @@ class MakeCommand extends Command
             resource: $resource
         ));
 
-        $className = sprintf('%sResource', ucfirst($resource));
-        $filename = sprintf($namespace . '\\%sResource.php', ucfirst($resource));
+        $className = sprintf('%sResource', Str::plural(ucfirst($resource)));
+        $filename = sprintf($namespace . '\\%sResource.php', Str::plural(ucfirst($resource)));
         $namespacedModel = $this->getModelNamespace(inModel: false, model: $model);
 
         if (windows_os()) {
@@ -316,7 +316,7 @@ class MakeCommand extends Command
 
         $filename = str_replace('\\', '/', $filename);
         if ($this->files->exists(app_path($filename))) {
-            $this->error("$resource Resource already exists!");
+            $this->error("$className Resource already exists!");
             return false;
         }
 
@@ -325,6 +325,7 @@ class MakeCommand extends Command
         $stub = $this->replaceClassName($className, $stub);
         $stub = str_replace('{{ namespacedModel }}', $namespacedModel, $stub);
         $stub = str_replace('{{ model }}', Str::singular($model), $stub);
+
 
         if (!is_null($this->argument('attributes'))) {
             $class = $namespacedModel;
@@ -366,7 +367,7 @@ class MakeCommand extends Command
         if (windows_os()) {
             $filename = str_replace('/', '\\', $filename);
         }
-
+        $filename = str_replace('\\', '/', $filename);
         if ($this->files->exists(app_path($filename))) {
             $this->error('Service already exists!');
             return false;
@@ -389,7 +390,6 @@ class MakeCommand extends Command
         $stub = str_replace('{{ namespacedModel }}', ucfirst($namespacedModel), $stub);
         $stub = str_replace('{{ model }}', Str::singular($model), $stub);
 
-        $filename = str_replace('\\', '/', $filename);
         $directory = dirname(app_path($filename));
         if (!$this->files->exists($directory)) {
             $this->files->makeDirectory($directory, 0755, true);
@@ -397,7 +397,7 @@ class MakeCommand extends Command
 
         $this->files->put(app_path($filename), $stub);
 
-        $this->info('Created controller ' . $filename);
+        $this->info('Created Service ' . $filename);
 
         return true;
     }
@@ -411,7 +411,7 @@ class MakeCommand extends Command
         $path = (!is_null($namespace)) ? $rootNamespace . '\\' . $namespace : $rootNamespace;
 
         if (!is_null($resource)) {
-            $path = sprintf($path . '\\%s', ucfirst($resource));
+            $path = sprintf($path . '\\%s', Str::plural(ucfirst($resource)));
         }
 
         return $path;
@@ -419,7 +419,7 @@ class MakeCommand extends Command
 
     private function generatePathService(string $path, string $resource): string
     {
-        return sprintf($path . '/%sService.php', ucfirst($resource));
+        return sprintf($path . '/%sService.php', Str::plural(ucfirst($resource)));
     }
 
     private function appendRoutes($modelName)
@@ -793,23 +793,24 @@ class MakeCommand extends Command
 
         $arrayFiles = [];
         foreach (['Index'] as $key => $action) {
-            $namespaceController = sprintf('App\\' . $path . '\\%s', ucfirst($controller));
+            $namespaceController = sprintf('App\\' . $path . '\\%s', Str::plural(ucfirst($controller)));
             $namespaceService = $this->getRootNamespace(
                 rootNamespace: 'App\\Services',
                 namespace: $namespace,
                 resource: $resource
             );
 
-            $controller = sprintf('%sController', $action);
             $service = !is_null($resource) ? sprintf('%sService', ucfirst($resource)) : null;
-            $file = sprintf($path . '/%s/%sController.php', ucfirst($resource), $action);
+            $_resource = Str::plural(ucfirst($resource));
+            $controller = sprintf('%s%sController', $_resource, $action);
+            $file = sprintf($path . '/%s/%sController.php', $_resource, $_resource . $action);
 
             $resourceNamespace = str_replace('/', '\\', $this->getRootNamespace(
                 rootNamespace: 'Http/Resources/Api',
                 namespace: $namespace,
-                resource: $resource
+                resource: $_resource
             ));
-            $resourceNamespace = sprintf($resourceNamespace . '\\%sResource', ucfirst($resource));
+            $resourceNamespace = sprintf($resourceNamespace . '\\%sResource', $_resource);
 
             $stub = $this->files->get(
                 path: $this->getStubs('controller.' . strtolower($action))
@@ -822,21 +823,21 @@ class MakeCommand extends Command
                 namespacedService: $namespaceService . '\\' . $service,
                 service: $service,
                 namespacedResource: $resourceNamespace,
-                resource: sprintf('%sResource', ucfirst($resource))
+                resource: sprintf('%sResource', Str::plural(ucfirst($resource)))
             );
-
+            $file = str_replace('\\', '/', $file);
             if ($this->files->exists(app_path($file))) {
-                $this->error($action . "Controller already exists!");
+                $this->error($controller . " already exists!");
             } else {
                 if (windows_os()) {
                     $arrayFiles[$key] = [
-                        'name' => $action,
-                        'file' => str_replace('/', '\\', $file),
+                        'name' => $controller,
+                        'file' => $file,
                         'stub' => $stub
                     ];
                 } else {
                     $arrayFiles[$key] = [
-                        'name' => $action,
+                        'name' => $controller,
                         'file' => $file,
                         'stub' => $stub
                     ];
