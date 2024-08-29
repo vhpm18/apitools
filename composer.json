@@ -14,6 +14,7 @@
         "directorytree/authorization": "^1.2",
         "juststeveking/sdk-tools": "^0.0.5",
         "laravel/framework": "^11.9",
+        "laravel/reverb": "^1.0",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^2.9",
         "predis/predis": "^2.2",
