@@ -6,9 +6,9 @@ namespace App\Http\Controllers\Api\V1\Users;
 
 use App\Enums\Version;
 use App\Http\Controllers\Controller;
-use App\Http\Resources\V1\UserResource;
+use App\Http\Resources\Api\V1\UserResource;
 use App\Http\Responses\PaginateResponse;
-use App\Services\UserService;
+use App\Services\V1\Users\UserService;
 use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
