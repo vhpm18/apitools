@@ -2,10 +2,9 @@
 
 declare(strict_types=1);
 
-use App\Models\User;
+use App\Broadcasting\PrivateUserChannel;
+use App\Broadcasting\PublicUserChannel;
 use Illuminate\Support\Facades\Broadcast;
 
-Broadcast::channel(
-    'App.Model.User.{id}',
-    fn(User $user, string $id): bool =>  $user->getKey() ===  $id,
-);
+Broadcast::channel(PublicUserChannel::ROUTE, PublicUserChannel::class);
+Broadcast::channel(PrivateUserChannel::ROUTE, PrivateUserChannel::class);

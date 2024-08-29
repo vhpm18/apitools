@@ -16,14 +16,28 @@ class AuthTokenController extends Controller
      */
     public function __invoke(AuthTokenRequest $request): JsonResponse
     {
-        $data = $request->validated();
+        $data = $request->validated([
+            'email' => 'required|email',
+            'password' => 'required',
+        ]);
 
         /** @var User $user */
         $user = User::whereEmail($data['email'])->first();
 
-        if (! Hash::check($data['password'], $user->password)) {
+        if (!$user) {
             throw ValidationException::withMessages([
-                'email' => [(string) trans('validation.credentials')],
+                'email' => ['The provided credentials are incorrect.'],
+            ]);
+        }
+
+        /** @var string */
+        $userPassword = $user->password;
+        $requestPassword = $request->string('password')->toString();
+
+
+        if (!Hash::check($requestPassword, $userPassword)) {
+            throw ValidationException::withMessages([
+                'email' => ['The provided credentials are incorrect.'],
             ]);
         }
 
