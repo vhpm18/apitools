@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
-use Illuminate\Support\Str;
+use Blueprint\Blueprint;
 use Illuminate\Console\Command;
-use Illuminate\Support\Composer;
 use Illuminate\Filesystem\Filesystem;
-use Illuminate\Support\Collection;
+use Illuminate\Process\Pipe;
+use Illuminate\Support\Composer;
+use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Str;
 
 class MakeCommand extends Command
 {
@@ -22,6 +24,7 @@ class MakeCommand extends Command
                             {--resource= : The Resource name}
                             {--controller= : The Controller name}
                             {--model= : The Model name}
+                            {--template= : Generate model and migrations}
                             {attributes?}';
 
     /**
@@ -43,65 +46,18 @@ class MakeCommand extends Command
      */
     private $composer;
 
-    /**
-     * @var array The data types that can be created in a migration.
-     */
-    private $dataTypes = [
-        'string',
-        'integer',
-        'boolean',
-        'bigIncrements',
-        'bigInteger',
-        'binary',
-        'boolean',
-        'char',
-        'date',
-        'dateTime',
-        'float',
-        'increments',
-        'json',
-        'jsonb',
-        'longText',
-        'mediumInteger',
-        'mediumText',
-        'nullableTimestamps',
-        'smallInteger',
-        'tinyInteger',
-        'softDeletes',
-        'text',
-        'time',
-        'timestamp',
-        'timestamps',
-        'rememberToken',
-    ];
-
-    private $fakerMethods = [
-        'string' => ['method' => 'words', 'parameters' => '2, true'],
-        'integer' => ['method' => 'randomNumber', 'parameters' => ''],
-    ];
-
-    /**
-     * @var array $columnProperties Properties that can be applied to a table column.
-     */
-    private $columnProperties = [
-        'unsigned',
-        'index',
-        'nullable'
-    ];
-
-    /**
-     * @param $rootNamespace
-     */
-    private $rootNamespaceService = 'Services';
 
     /**
      * Create a new command instance.
      *
      * @param Filesystem $files
      * @param Composer $composer
+     * @param Builder $builder;
      */
-    public function __construct(Filesystem $files, Composer $composer)
-    {
+    public function __construct(
+        Filesystem $files,
+        Composer $composer,
+    ) {
         parent::__construct();
 
         $this->files = $files;
@@ -120,155 +76,85 @@ class MakeCommand extends Command
         $resource = $this->option('resource');
         $controller = $this->option('controller');
         $model = $this->option('model');
+        $template = $this->option('template');
 
-        if (!is_null($resource) && !is_null($model)) {
-            $this->createService($namespace, $resource, Str::singular($model));
+        if (!is_null($template)) {
+            $this->files->put($this->defaultDraftFile(), $template);
+            $this->runBluePrint($namespace);
+            foreach ($this->getModels() as $model) {
+                $this->start($namespace, $model, $controller, $model);
+            }
+            return;
         }
 
-        if (!is_null($model)) {
-            $this->createModel(name: Str::singular($model));
-            $this->createMigration(name: Str::singular($model));
-            $this->createModelFactory(name: Str::singular($model));
+        $this->start($namespace, $resource, $controller, $model);
+        // $this->appendRoutes($name);
+    }
+
+    private function start(
+        string $namespace,
+        string $resource,
+        string $controller,
+        string $model
+    ): void {
+        if (!is_null($resource)) {
+            $this->createService($namespace, $resource, Str::singular($model ?? $resource));
         }
-
-
         if (!is_null($controller)) {
             $this->createController(
                 namespace: $namespace,
                 controller: $controller,
                 resource: $resource
             );
+
             $this->createResource(
                 namespace: $namespace,
                 resource: $resource,
                 model: Str::singular($model ?? $resource)
             );
         }
-
-        // $this->appendRoutes($name);
-
     }
 
-    private function createModelFactory(string $name)
+    private function runBluePrint(string $namespace): void
     {
-        $model = $this->modelName($name);
-
-        $stub = $this->files->get($this->getStubs(fileName: 'factory'));
-
-        $namespacedModel = $this->getModelNamespace(
-            inModel: false,
-            model: Str::singular($model)
-        );
-        $stub = str_replace('{{ namespacedModel }}', $namespacedModel, $stub);
-        $stub = str_replace('{{ model }}', $model, $stub);
-        $filename = sprintf('factories/%sFactory.php', ucfirst($model));
-
-        $class = $namespacedModel;
-        $model = new $class;
-
-        if (!is_null($this->argument('attributes'))) {
-            $stub = str_replace(
-                search: 'ATTRIBUTES',
-                replace: $this->buildFakerAttributes($model->migrationAttributes()),
-                subject: $stub
-            );
+        $result =  Process::pipe(function (Pipe $pipe) {
+            $pipe->command('php artisan blueprint:build');
+            $pipe->command('php artisan migrate');
+        });
+        if ($result->successful()) {
+            foreach ($this->getModels() as $model) {
+                $this->createRequest(namespace: $namespace, resource: $model);
+            }
+            //Artisan::call(command: 'migrate:rollback');
         }
-
-        if ($this->files->exists(database_path($filename))) {
-            $this->error('Model Factory already exists!');
-            return false;
-        }
-
-        $this->files->append(database_path($filename), $stub);
-
-        $this->info('Created model factory');
-
-        return true;
     }
 
-    public function buildFakerAttributes($attributes)
+    private function getModels(): array
     {
-        $faker = '';
+        $blueprint = resolve(Blueprint::class);
+        $contents = $this->files->get($this->defaultDraftFile());
+        $using_indexes = preg_match('/^\s+indexes:\R/m', $contents) !== 1;
 
-        foreach ($attributes as $attribute) {
+        $tokens = $blueprint->parse($contents, $using_indexes);
+        $models = array_keys($tokens['models']);
+        $registry = $blueprint->analyze($tokens);
+        return $models;
+    }
 
-            $formatter =
-                $this->fakerMethods[$this->getFieldTypeFromProperties($attribute['properties'])];
-
-            $method = $formatter['method'];
-            $parameters = $formatter['parameters'];
-
-            $faker .= "'" . $attribute['name'] . "' => fake()->" . $method . "(" . $parameters . ")," . PHP_EOL . '        ';
-        }
-
-        return rtrim($faker);
+    private function defaultDraftFile(): string
+    {
+        return file_exists('draft.yml') ? 'draft.yml' : 'draft.yaml';
     }
 
     public function buildResourceAttributes($attributes)
     {
         $resource = '';
         foreach ($attributes as $attribute) {
-            $resource .= "'" . $attribute['name'] . "' => \$this->resource->" . $attribute['name'] . "," . PHP_EOL . '        ';
+            $resource .= "'" . $attribute . "' => \$this->resource->" . $attribute . "," . PHP_EOL . '';
         }
         return rtrim($resource);
     }
 
-    /**
-     * Create and store a new Model to the filesystem.
-     *
-     * @param string $name
-     * @return bool
-     */
-    private function createModel(string $name)
-    {
-        $modelName = $this->modelName($name);
-
-        $filename = $modelName . '.php';
-        $filename_path = app_path('Models/' . $filename);
-
-        if ($this->files->exists($filename_path)) {
-            $this->error('Model already exists!');
-            return false;
-        }
-
-        $directory = dirname($filename_path);
-        if (!$this->files->exists($directory)) {
-            $this->files->makeDirectory($directory, 0755, true);
-        }
-
-        $model = $this->buildModel($name);
-
-        $this->files->put($filename_path, $model);
-
-        $this->info($modelName . ' Model created');
-
-        return true;
-    }
-
-    private function createMigration(string $name)
-    {
-        $filename = $this->buildMigrationFilename($name);
-
-        if ($this->files->exists(database_path($filename))) {
-            $this->error('Migration already exists!');
-            return false;
-        }
-
-        $migration = $this->buildMigration($name);
-
-        $this->files->put(
-            database_path('/migrations/' . $filename),
-            $migration
-        );
-
-        if (env('APP_ENV') != 'testing') {
-            $this->composer->dumpAutoloads();
-        }
-
-        $this->info('Created migration ' . $filename);
-
-        return true;
-    }
 
     private function createController(string $namespace, string $controller, null|string $resource)
     {
@@ -295,6 +181,26 @@ class MakeCommand extends Command
             $this->info('Created controller ' . $file['name']);
         }
 
+        return true;
+    }
+
+    private function createRequest(string $namespace, string $resource)
+    {
+        foreach (['Store', 'Update'] as $key => $action) {
+            $this->callSilently(
+                command: 'schema:generate-rules',
+                arguments: [
+                    'table' => Str::plural(strtolower($resource)),
+                    '--create-request' => true,
+                    '--file' => $this->buildFilePath(
+                        type: 'request',
+                        resource: $resource,
+                        namespace: $namespace,
+                        action: $action
+                    )
+                ]
+            );
+        }
         return true;
     }
 
@@ -327,12 +233,12 @@ class MakeCommand extends Command
         $stub = str_replace('{{ model }}', Str::singular($model), $stub);
 
 
-        if (!is_null($this->argument('attributes'))) {
+        if (!is_null($namespacedModel)) {
             $class = $namespacedModel;
             $model = new $class;
             $stub = str_replace(
                 search: '{{ ATTRIBUTES }}',
-                replace: $this->buildResourceAttributes($model->migrationAttributes()),
+                replace: $this->buildResourceAttributes($model->getFillable()),
                 subject: $stub
             );
         } else {
@@ -342,7 +248,6 @@ class MakeCommand extends Command
                 subject: $stub
             );
         }
-
 
         $directory = dirname(app_path($filename));
         if (!$this->files->exists($directory)) {
@@ -444,81 +349,6 @@ class MakeCommand extends Command
         $this->info('Added routes for ' . $modelTitle);
     }
 
-    protected function buildMigration(string $name)
-    {
-        $stub = '';
-        $class = $this->getModelNamespace(inModel: false, model: $name);
-        $model = new $class;
-
-        if (!is_null($this->argument('attributes'))) {
-            $stub = $this->files->get(path: $this->getStubs(fileName: 'migration.create'));
-            $stub = str_replace(
-                search: '{{ MIGRATION_COLUMNS_PLACEHOLDER }}',
-                replace: $this->buildTableColumns(
-                    attributes: $model->migrationAttributes()
-                ),
-                subject: $stub
-            );
-        } else {
-            $stub = $this->files->get(path: $this->getStubs('migration.clear'));
-        }
-
-        $table = strtolower(Str::plural($name));
-
-        $stub = str_replace('{{ table }}', $table, $stub);
-
-        return $stub;
-    }
-
-    protected function buildModel($name)
-    {
-        if (!is_null($this->argument('attributes'))) {
-            $stub = $this->files->get(path: $this->getStubs('model.attributes'));
-            $stub = $this->replaceClassName(className: $name, stub: $stub);
-            $stub = $this->replaceNamespace(
-                $this->getModelNamespace(inModel: true, model: $name),
-                stub: $stub
-            );
-
-            $stub = $this->addMigrationAttributes($this->argument('attributes'), $stub);
-
-            $stub = $this->addModelAttributes(
-                $this->argument('attributes'),
-                $stub
-            );
-
-            $stub = $this->addModelHiddenAttributes(
-                $this->argument('attributes'),
-                $stub
-            );
-
-            return $stub;
-        }
-
-        $stub = $this->files->get(path: $this->getStubs('model'));
-
-        $stub = $this->replaceClassName(className: $name, stub: $stub);
-
-        $stub = $this->replaceNamespace(
-            namespace: $this->getModelNamespace(inModel: true, model: $name),
-            stub: $stub
-        );
-
-        return $stub;
-    }
-
-    public function convertModelToTableName($model)
-    {
-        return Str::plural(Str::snake($model));
-    }
-
-    public function buildMigrationFilename($model)
-    {
-        $table = $this->convertModelToTableName($model);
-
-        return date('Y_m_d_his') . '_create_' . $table . '_table.php';
-    }
-
     private function replaceClassName(string $className, string $stub)
     {
         return str_replace('{{ class }}', $className, $stub);
@@ -527,14 +357,6 @@ class MakeCommand extends Command
     private function replaceNamespace(string $namespace, string $stub)
     {
         return str_replace('{{ namespace }}', ucfirst($namespace), $stub);
-    }
-
-    private function addMigrationAttributes($text, $stub)
-    {
-        $attributesAsArray = $this->parseAttributesFromInputString($text);
-        $attributesAsText = $this->convertArrayToString($attributesAsArray);
-
-        return str_replace('MIGRATION_ATTRIBUTES_PLACEHOLDER', $attributesAsText, $stub);
     }
 
     /**
@@ -556,167 +378,6 @@ class MakeCommand extends Command
         }
 
         return $attributes;
-    }
-
-    /**
-     * Convert a PHP array into a string version.
-     *
-     * @param $array
-     *
-     * @return string
-     */
-    public function convertArrayToString($array)
-    {
-        $string = '[';
-
-        foreach ($array as $name => $properties) {
-            $string .= '[';
-            $string .= "'name' => '" . $name . "',";
-
-            $string .= "'properties' => [";
-            foreach ($properties as $property) {
-                $string .= "'" . $property . "', ";
-            }
-            $string = rtrim($string, ', ');
-            $string .= ']';
-
-            $string .= '],';
-        }
-
-        $string = rtrim($string, ',');
-
-        $string .= ']';
-
-
-        return $string;
-    }
-
-    public function addModelAttributes($attributes, $stub): string
-    {
-        $attributes = implode(
-            ', ',
-            array_map(function ($attribute) {
-                return "'" . $attribute . "'";
-            }, array_keys($this->parseAttributesFromInputString($attributes)))
-        );
-        return str_replace('{{ fillable }}', $attributes, $stub);
-    }
-
-    public function addModelHiddenAttributes($attributes, $stub): string
-    {
-        $hiddenAttributes = collect($this->parseAttributesFromInputString($attributes))
-            ->filter(fn($attribute) => in_array('hidden', $attribute))
-            ->map(fn($attribute) => $attribute)
-            ->keys()->toArray();
-
-        $hidden = implode(
-            ', ',
-            array_map(function ($attribute) {
-                return "'" . $attribute . "'";
-            }, $hiddenAttributes)
-        );
-
-        return str_replace('{{ hidden }}', $hidden, $stub);
-    }
-
-    public function buildTableColumns($attributes)
-    {
-
-        return rtrim(collect($attributes)->reduce(function ($column, $attribute) {
-
-            $fieldType = $this->getFieldTypeFromProperties($attribute['properties']);
-
-            if ($length = $this->typeCanDefineSize($fieldType)) {
-                $length = $this->extractFieldLengthValue($attribute['properties']);
-            }
-
-            $properties = $this->extractAttributePropertiesToApply($attribute['properties']);
-
-            return $column . $this->buildSchemaColumn($fieldType, $attribute['name'], $length, $properties);
-        }));
-    }
-
-    /**
-     * Get the column field type based from the properties of the field being created.
-     *
-     * @param array $properties
-     * @return string
-     */
-    private function getFieldTypeFromProperties($properties)
-    {
-        $type = array_intersect($properties, $this->dataTypes);
-
-        // If the properties that were given in the command
-        // do not explicitly define a data type, or there
-        // is no matching data type found, the column
-        // should be cast to a string.
-
-        if (! $type) {
-            return 'string';
-        }
-
-        return $type[0];
-    }
-
-    /**
-     * Can the data type have it's size controlled within the migration?
-     *
-     * @param string $type
-     * @return bool
-     */
-    private function typeCanDefineSize($type)
-    {
-        return $type == 'string' || $type == 'char';
-    }
-
-    /**
-     * Extract a numeric length value from all properties specified for the attribute.
-     *
-     * @param array $properties
-     * @return int $length
-     */
-    private function extractFieldLengthValue($properties)
-    {
-        foreach ($properties as $property) {
-            if (is_numeric($property)) {
-                return $property;
-            }
-        }
-
-        return 0;
-    }
-
-    /**
-     * Get the column properties that should be applied to the column.
-     *
-     * @param $properties
-     * @return array
-     */
-    private function extractAttributePropertiesToApply($properties)
-    {
-        return array_intersect($properties, $this->columnProperties);
-    }
-
-    /**
-     * Create a Schema Builder column.
-     *
-     * @param string $fieldType The type of column to create
-     * @param string $name Name of the column to create
-     * @param int $length Field length
-     * @param array $traits Additional properties to apply to the column
-     * @return string
-     */
-    private function buildSchemaColumn($fieldType, $name, $length = 0, $traits = [])
-    {
-        return sprintf(
-            "\$table->%s('%s'%s)%s;" . PHP_EOL . '            ',
-            $fieldType,
-            $name,
-            $length > 0 ? ", $length" : '',
-            implode('', array_map(function ($trait) {
-                return '->' . $trait . '()';
-            }, $traits))
-        );
     }
 
     /**
@@ -865,5 +526,18 @@ class MakeCommand extends Command
         $stub = str_replace('{{ resource }}', $resource, $stub);
 
         return $stub;
+    }
+    private function buildFilePath(
+        string $type,
+        string $resource,
+        string $namespace,
+        string $action = null
+    ): string {
+        return match ($type) {
+            'controller' => sprintf('Api/%s/%s%sController', $resource, $resource, $action),
+            'request'    => sprintf('Api/%s/%s/%s%sRequest', $namespace, Str::plural($resource), Str::plural($resource), $action),
+            'resource'   => sprintf('%s/%sResource', $namespace, Str::plural($resource)),
+            default      => sprintf('Http/Controllers/Api/%s/%s/%s%sControllerTest', $namespace, $resource, $resource, $action),
+        };
     }
 }

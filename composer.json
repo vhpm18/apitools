@@ -9,6 +9,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.2",
+        "brick/varexporter": "^0.5.0",
         "composer/semver": "^3.4",
         "directorytree/authorization": "^1.2",
         "juststeveking/sdk-tools": "^0.0.5",
@@ -21,6 +22,8 @@
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
+        "laracraft-tech/laravel-schema-rules": "^1.4",
+        "laravel-shift/blueprint": "^2.10",
         "laravel/breeze": "^2.1",
         "laravel/pint": "^1.17",
         "laravel/sail": "^1.26",
