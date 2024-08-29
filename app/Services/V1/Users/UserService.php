@@ -2,11 +2,12 @@
 
 declare(strict_types=1);
 
-namespace App\Services;
+namespace App\Services\V1\Users;
 
 use App\Enums\Cache\CacheKey;
 use App\Enums\Cache\CacheTtl;
 use App\Models\User;
+use App\Services\CacheService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Eloquent\Model;

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Http\Resources\V1;
+namespace App\Http\Resources\Api\V1;
 
+use App\Http\Resources\Api\V1\RoleResource;
 use App\Http\Resources\DateResource;
-use App\Http\Resources\V1\RoleResource;
 use App\Models\User;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Http\Request;
