@@ -7,7 +7,6 @@ namespace App\Http\Middleware;
 use App\Enums\Cache\CacheTtl;
 use Closure;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 class CacheLayer
@@ -46,7 +45,7 @@ class CacheLayer
 
         $exception = null;
 
-        $response = cache()
+        $cachedResponse = cache()
             ->tags([$request->url()])
             ->remember(
                 key: $cacheKey,
@@ -59,18 +58,33 @@ class CacheLayer
                         return null;
                     }
 
-                    return gzcompress($res->getContent());
+                    return [
+                        'content' => gzcompress($res->getContent()),
+                        'status' => $res->status(),
+                        'headers' => $res->headers->all(),
+                    ];
                 }
             );
+        if ($exception) {
+            return $exception;
+        }
 
-        return $exception ?? response(gzuncompress($response));
+
+
+        if ($cachedResponse) {
+            // return response(gzuncompress($cachedResponse['content']))
+            //     ->setStatusCode($cachedResponse['status'])
+            //     ->withHeaders($cachedResponse['headers']);
+        }
+        // Fallback en caso de que la caché falle
+        return $next($request);
     }
 
     private function getCacheKey(Request $request): string
     {
         $routeParameters = !empty($request->route()->parameters)
             ? $request->route()->parameters
-            : [Auth()->user()->id];
+            : [$request->user()->id];
 
         $allParameters = array_merge($request->all(), $routeParameters);
 
