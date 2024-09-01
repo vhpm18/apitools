@@ -2,7 +2,12 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\V1\Auth\AuthTokenController;
+use App\Http\Controllers\Api\V1\Auth\RemoveTokenController;
 use Illuminate\Support\Facades\Route;
+
+
+
 
 Route::prefix('{version}')
     ->group(
@@ -10,10 +15,10 @@ Route::prefix('{version}')
     );
 
 
+Route::middleware(['guest'])
+    ->post('/auth/token', AuthTokenController::class)
+    ->name('api.auth.token');
 
-
-// Route::get('/user', function (Request $request) {
-//     return response()->json(User::all());
-//     //return $request->user();
-// })->middleware('treblle', 'allow:GET.POST,PUT');
-// //->middleware('auth:sanctum');
+Route::middleware('auth:sanctum')
+    ->post('/token/remove', RemoveTokenController::class)
+    ->name('api.token.remove');

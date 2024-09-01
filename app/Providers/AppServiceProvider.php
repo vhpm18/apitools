@@ -7,11 +7,14 @@ namespace App\Providers;
 use App\Models\Permission;
 use App\Models\Role;
 use App\Models\User;
+use App\Notifications\VerifyEmailNotification;
 use App\Observers\V1\UserObserver;
 use DirectoryTree\Authorization\Authorization;
+use Illuminate\Auth\Events\Registered;
 use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -44,11 +47,15 @@ class AppServiceProvider extends ServiceProvider
         Authorization::cacheKey('auth:');
 
         //register observer
-        User::observe(UserObserver::class);
+        // User::observe(UserObserver::class);
 
         if ($this->app->environment('local')) {
             $this->app->register(\Laravel\Telescope\TelescopeServiceProvider::class);
             $this->app->register(TelescopeServiceProvider::class);
         }
+
+        Event::listen(function (Registered $event) {
+            VerifyEmailNotification::class;
+        });
     }
 }
