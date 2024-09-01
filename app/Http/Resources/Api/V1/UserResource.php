@@ -22,6 +22,7 @@ final class UserResource extends JsonResource
             'id' => $this->resource->id,
             'name' => $this->resource->name,
             'email' => $this->resource->email,
+            'email_verified_at' => $this->resource->email_verified_at,
             'roles' => RoleResource::collection(
                 resource: $this->whenLoaded(
                     relationship: 'roles',
