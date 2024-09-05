@@ -101,6 +101,7 @@ class MakeCommand extends Command
             $this->createService($namespace, $resource, Str::singular($model ?? $resource));
         }
         if (!is_null($controller)) {
+
             $this->createController(
                 namespace: $namespace,
                 controller: $controller,
@@ -110,7 +111,7 @@ class MakeCommand extends Command
             $this->createResource(
                 namespace: $namespace,
                 resource: $resource,
-                model: Str::singular($model ?? $resource)
+                model: $model ?? $resource
             );
         }
     }
@@ -122,10 +123,14 @@ class MakeCommand extends Command
             $pipe->command('php artisan migrate');
         });
         if ($result->successful()) {
+            sleep(2);
+            \Illuminate\Support\Facades\Schema::refreshDatabaseSchema();
             foreach ($this->getModels() as $model) {
                 $this->createRequest(namespace: $namespace, resource: $model);
             }
             //Artisan::call(command: 'migrate:rollback');
+        } else {
+            $this->error('Failed to run blueprint:build or migrate');
         }
     }
 
@@ -137,7 +142,7 @@ class MakeCommand extends Command
 
         $tokens = $blueprint->parse($contents, $using_indexes);
         $models = array_keys($tokens['models']);
-        $registry = $blueprint->analyze($tokens);
+        //$registry = $blueprint->analyze($tokens);
         return $models;
     }
 
@@ -541,3 +546,4 @@ class MakeCommand extends Command
         };
     }
 }
+
