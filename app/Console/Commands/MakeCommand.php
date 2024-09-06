@@ -212,7 +212,7 @@ class MakeCommand extends Command
     private function createResource(string $namespace, string $resource, string $model): bool
     {
         $namespace = str_replace('/', '\\', $this->getRootNamespace(
-            rootNamespace: 'Http/Resources/Api',
+            rootNamespace: 'App/Http/Resources/Api',
             namespace: $namespace,
             resource: $resource
         ));
@@ -472,7 +472,7 @@ class MakeCommand extends Command
             $file = sprintf($path . '/%s/%sController.php', $_resource, $_resource . $action);
 
             $resourceNamespace = str_replace('/', '\\', $this->getRootNamespace(
-                rootNamespace: 'Http/Resources/Api',
+                rootNamespace: 'App/Http/Resources/Api',
                 namespace: $namespace,
                 resource: $_resource
             ));
