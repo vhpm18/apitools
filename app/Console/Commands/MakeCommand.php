@@ -329,7 +329,7 @@ class MakeCommand extends Command
 
     private function generatePathService(string $path, string $resource): string
     {
-        return sprintf($path . '/%sService.php', Str::plural(ucfirst($resource)));
+        return sprintf($path . '/%sService.php', ucfirst($resource));
     }
 
     private function appendRoutes($modelName)
