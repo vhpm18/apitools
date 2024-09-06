@@ -288,7 +288,7 @@ class MakeCommand extends Command
         $namespacedModel = !is_null($model)
             ? $this->getModelNamespace(
                 inModel: false,
-                model: Str::singular($model)
+                model: $model
             )
             : $this->error('Indique modelo para servicio');
 
@@ -546,4 +546,3 @@ class MakeCommand extends Command
         };
     }
 }
-
